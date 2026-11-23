@@ -1,5 +1,9 @@
 # Starfall — a tiny game built from one prompt
 
+[![make.fun](https://make.fun/badge/post-x-the-agent-builds-a-game-from-20261122-1709.svg)](https://make.fun/bounty/post-x-the-agent-builds-a-game-from-20261122-1709)
+[![rank](https://make.fun/badge/post-x-the-agent-builds-a-game-from-20261122-1709/Gyokuen01/post-x-the-agent-builds-a-game-entry/rank.svg)](https://make.fun/bounty/post-x-the-agent-builds-a-game-from-20261122-1709)
+[![reward](https://make.fun/badge/post-x-the-agent-builds-a-game-from-20261122-1709/Gyokuen01/post-x-the-agent-builds-a-game-entry/reward.svg)](https://make.fun/bounty/post-x-the-agent-builds-a-game-from-20261122-1709)
+
 A tiny browser arcade game in a single self-contained `index.html` — no
 libraries, no external assets, no sound. Built by an AI coding agent from
 exactly ONE prompt (see `PROMPT.md`).
