@@ -103,7 +103,7 @@
       kind: rock ? "rock" : "star",
       x: rand(30, Math.max(31, W - 30)),
       y: -30,
-      vy: rand(240, 320) + Math.min(260, elapsed * 6),
+      vy: rand(320, 420) + Math.min(300, elapsed * 8),
       vx: rand(-30, 30),
       r: r, rot: rand(0, 6.28), vr: rand(-1.5, 1.5), pts: pts
     });
@@ -159,10 +159,10 @@
   canvas.addEventListener("pointermove", function (e) { if (e.buttons) pointerX(e.clientX); });
 
   function nearestStarX() {
-    var bestY = Infinity, bx = null;
+    var bestY = -Infinity, bx = null;
     for (var i = 0; i < items.length; i++) {
       var it = items[i];
-      if (it.kind === "star" && it.y < basket.y && it.y < bestY) { bestY = it.y; bx = it.x; }
+      if (it.kind === "star" && it.y < basket.y && it.y > bestY) { bestY = it.y; bx = it.x; }
     }
     return bx;
   }
@@ -190,7 +190,7 @@
     if (state !== "playing") return;
 
     spawnT -= dt;
-    if (spawnT <= 0) { spawnItem(); spawnT = Math.max(0.32, 0.75 - elapsed * 0.006); }
+    if (spawnT <= 0) { spawnItem(); spawnT = Math.max(0.3, 0.65 - elapsed * 0.006); }
 
     for (var i = items.length - 1; i >= 0; i--) {
       var it = items[i];
