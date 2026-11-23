@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Starfall — a tiny game built from one prompt</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#070b1e; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #game { display:block; width:100vw; height:100vh; touch-action:none; }
+  .overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; color:#fff; background:rgba(5,8,25,.72); z-index:5; padding:24px; }
+  .overlay h1 { font-size:64px; letter-spacing:2px; color:#ffd94a; text-shadow:0 0 24px rgba(255,217,74,.7); }
+  .overlay h2 { font-size:34px; margin:10px 0 4px; color:#9fd8ff; }
+  .overlay p { font-size:24px; line-height:1.5; color:#dfe8ff; max-width:640px; }
+  .overlay .keys { font-size:22px; color:#9fb0d8; margin-top:14px; }
+  .btn { margin-top:26px; font-size:28px; font-weight:700; color:#101736; background:#ffd94a; border:0; border-radius:999px; padding:16px 44px; cursor:pointer; box-shadow:0 0 28px rgba(255,217,74,.55); }
+  .btn:active { transform:scale(.97); }
+  .hidden { display:none !important; }
+  #hud { position:fixed; top:0; left:0; right:0; display:flex; justify-content:space-between; padding:18px 22px; color:#fff; font-size:26px; font-weight:700; text-shadow:0 2px 8px rgba(0,0,0,.6); z-index:4; pointer-events:none; }
+  #hud .lives { color:#ff6b81; letter-spacing:2px; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="hud"><span id="score">SCORE 0</span><span id="best">BEST 0</span><span class="lives" id="lives">♥♥♥</span></div>
+
+<div class="overlay" id="startScreen">
+  <h1>⭐ STARFALL</h1>
+  <h2>Catch the stars. Dodge the rocks.</h2>
+  <p>Slide the basket and catch falling stars for +10 points.<br>A rock costs one life — you have 3.</p>
+  <p class="keys">← → arrow keys &nbsp;•&nbsp; drag with mouse / touch</p>
+  <button class="btn" id="startBtn">▶ &nbsp;START</button>
+</div>
+
+<div class="overlay hidden" id="overScreen">
+  <h1>GAME OVER</h1>
+  <h2 id="finalScore">Score 0</h2>
+  <p id="bestLine">Best 0</p>
+  <button class="btn" id="againBtn">↻ &nbsp;PLAY AGAIN</button>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var canvas = document.getElementById("game");
+  var ctx = canvas.getContext("2d");
+  var scoreEl = document.getElementById("score");
+  var bestEl = document.getElementById("best");
+  var livesEl = document.getElementById("lives");
+  var startScreen = document.getElementById("startScreen");
+  var overScreen = document.getElementById("overScreen");
+
+  var W = 0, H = 0, DPR = 1;
+  var params = new URLSearchParams(location.search);
+  var DEMO = params.get("demo") === "1";
+
+  var basket = { x: 0, y: 0, w: 160, h: 26, target: null, vx: 0 };
+  var items = [], parts = [], bgStars = [];
+  var score = 0, lives = 3, best = 0, state = "start";
+  var elapsed = 0, spawnT = 0, last = 0, flash = 0, overT = 0;
+
+  try { best = parseInt(localStorage.getItem("starfall-best") || "0", 10) || 0; } catch (e) { best = 0; }
+  function saveBest() { try { localStorage.setItem("starfall-best", String(best)); } catch (e) {} }
+
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.round(W * DPR);
+    canvas.height = Math.round(H * DPR);
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    basket.y = H - 120;
+    basket.w = Math.max(120, W * 0.22);
+    basket.h = 26;
+    basket.x = Math.min(Math.max(basket.x, 0), Math.max(0, W - basket.w));
+    if (!bgStars.length) {
+      for (var i = 0; i < 90; i++) {
+        bgStars.push({ x: Math.random(), y: Math.random(), r: Math.random() * 1.8 + 0.4, p: Math.random() * 6.28, s: 0.5 + Math.random() * 1.5 });
+      }
+    }
+  }
+  window.addEventListener("resize", resize);
+  resize();
+  basket.x = (W - basket.w) / 2;
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function spawnItem() {
+    var rock = Math.random() < 0.3;
+    var r = rock ? rand(16, 24) : rand(13, 18);
+    var pts = null;
+    if (rock) {
+      pts = [];
+      for (var i = 0; i < 7; i++) {
+        var a = (i / 7) * Math.PI * 2;
+        var rr = r * rand(0.75, 1.1);
+        pts.push([Math.cos(a) * rr, Math.sin(a) * rr]);
+      }
+    }
+    items.push({
+      kind: rock ? "rock" : "star",
+      x: rand(30, Math.max(31, W - 30)),
+      y: -30,
+      vy: rand(240, 320) + Math.min(260, elapsed * 6),
+      vx: rand(-30, 30),
+      r: r, rot: rand(0, 6.28), vr: rand(-1.5, 1.5), pts: pts
+    });
+  }
+
+  function burst(x, y, color) {
+    for (var i = 0; i < 14; i++) {
+      var a = Math.random() * Math.PI * 2, sp = rand(60, 260);
+      parts.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 60, life: rand(0.3, 0.7), max: 0.7, color: color, r: rand(2, 4.5) });
+    }
+  }
+
+  function startGame() {
+    score = 0; lives = 3; items = []; parts = []; elapsed = 0; spawnT = 0; flash = 0;
+    state = "playing";
+    startScreen.classList.add("hidden");
+    overScreen.classList.add("hidden");
+    updateHud();
+  }
+
+  function gameOver() {
+    state = "over";
+    overT = 0;
+    if (score > best) { best = score; saveBest(); }
+    document.getElementById("finalScore").textContent = "Score " + score;
+    document.getElementById("bestLine").textContent = "Best " + best + (score >= best && score > 0 ? " — new best!" : "");
+    overScreen.classList.remove("hidden");
+    updateHud();
+  }
+
+  function updateHud() {
+    scoreEl.textContent = "SCORE " + score;
+    bestEl.textContent = "BEST " + best;
+    livesEl.textContent = "♥".repeat(Math.max(0, lives)) + "♡".repeat(Math.max(0, 3 - lives));
+  }
+
+  document.getElementById("startBtn").addEventListener("click", startGame);
+  document.getElementById("againBtn").addEventListener("click", startGame);
+
+  var keys = {};
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === " ") e.preventDefault();
+    keys[e.key] = true;
+    if ((e.key === "Enter" || e.key === " ") && state !== "playing") startGame();
+  });
+  window.addEventListener("keyup", function (e) { keys[e.key] = false; });
+
+  function pointerX(clientX) {
+    var rect = canvas.getBoundingClientRect();
+    basket.target = clientX - rect.left - basket.w / 2;
+  }
+  canvas.addEventListener("pointerdown", function (e) { pointerX(e.clientX); });
+  canvas.addEventListener("pointermove", function (e) { if (e.buttons) pointerX(e.clientX); });
+
+  function nearestStarX() {
+    var bestY = Infinity, bx = null;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (it.kind === "star" && it.y < basket.y && it.y < bestY) { bestY = it.y; bx = it.x; }
+    }
+    return bx;
+  }
+
+  function update(dt) {
+    elapsed += dt;
+    if (flash > 0) flash -= dt;
+
+    // basket movement
+    var speed = W * 1.6;
+    if (DEMO && state === "playing") {
+      var tx = nearestStarX();
+      if (tx !== null) basket.target = tx - basket.w / 2;
+    }
+    if (keys["ArrowLeft"]) { basket.x -= speed * dt; basket.target = null; }
+    if (keys["ArrowRight"]) { basket.x += speed * dt; basket.target = null; }
+    if (basket.target !== null && basket.target !== undefined) {
+      var dx = basket.target - basket.x;
+      var step = speed * dt;
+      basket.x += Math.max(-step, Math.min(step, dx));
+      if (Math.abs(dx) < 2) basket.target = null;
+    }
+    basket.x = Math.min(Math.max(basket.x, 0), Math.max(0, W - basket.w));
+
+    if (state !== "playing") return;
+
+    spawnT -= dt;
+    if (spawnT <= 0) { spawnItem(); spawnT = Math.max(0.32, 0.75 - elapsed * 0.006); }
+
+    for (var i = items.length - 1; i >= 0; i--) {
+      var it = items[i];
+      it.y += it.vy * dt;
+      it.x += it.vx * dt;
+      it.rot += it.vr * dt;
+      if (it.x < 10 || it.x > W - 10) it.vx *= -1;
+      var caught = it.y + it.r >= basket.y && it.y <= basket.y + basket.h + 10 &&
+                   it.x > basket.x - 6 && it.x < basket.x + basket.w + 6;
+      if (caught) {
+        if (it.kind === "star") { score += 10; burst(it.x, basket.y, "#ffd94a"); }
+        else { lives -= 1; flash = 0.35; burst(it.x, basket.y, "#ff6b81"); }
+        items.splice(i, 1);
+        updateHud();
+        if (lives <= 0) { gameOver(); return; }
+        continue;
+      }
+      if (it.y - it.r > H + 20) items.splice(i, 1);
+    }
+
+    for (var j = parts.length - 1; j >= 0; j--) {
+      var p = parts[j];
+      p.life -= dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 320 * dt;
+      if (p.life <= 0) parts.splice(j, 1);
+    }
+  }
+
+  function drawStar(cx, cy, r, rot) {
+    ctx.beginPath();
+    for (var i = 0; i < 10; i++) {
+      var a = rot + (i / 10) * Math.PI * 2 - Math.PI / 2;
+      var rr = i % 2 === 0 ? r : r * 0.45;
+      var x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+
+  function draw() {
+    var g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, "#0b1030");
+    g.addColorStop(0.55, "#1b2350");
+    g.addColorStop(1, "#3b2a63");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+
+    // twinkling background stars
+    var t = performance.now() / 1000;
+    ctx.fillStyle = "#ffffff";
+    for (var i = 0; i < bgStars.length; i++) {
+      var s = bgStars[i];
+      ctx.globalAlpha = 0.25 + 0.55 * Math.abs(Math.sin(t * s.s + s.p));
+      ctx.beginPath();
+      ctx.arc(s.x * W, s.y * H, s.r, 0, 6.29);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // falling items
+    for (var k = 0; k < items.length; k++) {
+      var it = items[k];
+      ctx.save();
+      ctx.translate(it.x, it.y);
+      ctx.rotate(it.rot);
+      if (it.kind === "star") {
+        ctx.shadowColor = "#ffd94a"; ctx.shadowBlur = 18;
+        ctx.fillStyle = "#ffd94a";
+        drawStar(0, 0, it.r, 0);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#fff3b0";
+        drawStar(0, 0, it.r * 0.45, 0);
+        ctx.fill();
+      } else {
+        ctx.shadowColor = "#000"; ctx.shadowBlur = 8;
+        ctx.fillStyle = "#8a8fa3";
+        ctx.beginPath();
+        for (var m = 0; m < it.pts.length; m++) {
+          if (m === 0) ctx.moveTo(it.pts[m][0], it.pts[m][1]); else ctx.lineTo(it.pts[m][0], it.pts[m][1]);
+        }
+        ctx.closePath(); ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#6d7286";
+        ctx.beginPath(); ctx.arc(-it.r * 0.25, -it.r * 0.2, it.r * 0.22, 0, 6.29); ctx.fill();
+        ctx.beginPath(); ctx.arc(it.r * 0.3, it.r * 0.25, it.r * 0.16, 0, 6.29); ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    // particles
+    for (var j = 0; j < parts.length; j++) {
+      var p = parts[j];
+      ctx.globalAlpha = Math.max(0, p.life / p.max);
+      ctx.fillStyle = p.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.29); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    // basket
+    ctx.save();
+    ctx.shadowColor = "#7fd4ff"; ctx.shadowBlur = 22;
+    ctx.fillStyle = "#2f6df6";
+    roundRect(basket.x, basket.y, basket.w, basket.h, 12);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "#7fd4ff";
+    roundRect(basket.x, basket.y, basket.w, 8, 4);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,.85)";
+    ctx.font = "bold 20px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("CATCH", basket.x + basket.w / 2, basket.y + basket.h - 6);
+    ctx.restore();
+
+    if (flash > 0) {
+      ctx.fillStyle = "rgba(255,60,80," + (flash * 0.55) + ")";
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function loop(ts) {
+    var dt = Math.min(0.05, (ts - last) / 1000 || 0.016);
+    last = ts;
+    if (state === "over" && DEMO) {
+      overT += dt;
+      if (overT > 1.4) startGame();
+    }
+    update(dt);
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  updateHud();
+  if (DEMO) startGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
